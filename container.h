@@ -17,10 +17,10 @@ template <class Key,
          class KeyHash = boost::hash<Key>>
 class Map
 {
+public:
     using ValuePtr = typename ValueAllocator::pointer;
     using KeyPtr = typename KeyAllocator::pointer;
 
-public:
     using key_type = Key;
     using value_type = Value;
 

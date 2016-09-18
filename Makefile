@@ -1,28 +1,31 @@
-APPNAME=container
-TESTNAME=container_test
-APPSOURCES=container.cpp
-TESTSOURCES=container_test.cpp
-
 CC=g++
 
-CXXFLAGS=--std=c++11 -Wall -O3 -g0 -I/opt/boost161/include
-LDFLAGS=-L/opt/boost161/lib -pthread -lboost_system -lboost_chrono
+APPNAME=container
+APPSOURCES=container.cpp
+APPOBJECTS=container.o
 
-.PHONY: all test clean
+TESTNAME=container_test
+TESTSOURCES=container_test.cpp
+TESTOBJECTS=container_test.o
 
-default: clean all test
+CXXFLAGS=-std=c++11 -c -DBOOST_LOG_DYN_LINK -Wall -O3 -g0 -isystem/opt/boost161/include
+LDFLAGS_COMMON=-L/opt/boost161/lib -pthread -lboost_system -lboost_chrono
+LDFLAGS_APP=$(LDFLAGS_COMMON) -lboost_filesystem -lboost_log
+LDFLAGS_TEST=$(LDFLAGS_COMMON) -lboost_unit_test_framework
+
+
+default: all
 
 clean:
-	rm -f *.o
-	rm -f $(APPNAME)
-	rm -f $(TESTNAME)
+	rm -fr *.o $(APPNAME) $(TESTNAME)
 
-all: $(APPNAME)
+all: $(APPSOURCES) $(TESTSOURCES) $(APPNAME) $(TESTNAME)
 
-test: $(TESTNAME)
+$(APPNAME): $(APPOBJECTS)
+	$(CC) $(APPOBJECTS) $(LDFLAGS_APP) -o $@
 
-$(APPNAME):
-	g++ $(CXXFLAGS) $(LDFLAGS) $(APPSOURCES) -o $(APPNAME)
+$(TESTNAME): $(TESTOBJECTS)
+	$(CC) $(TESTOBJECTS) $(LDFLAGS_TEST) -o $@
 
-$(TESTNAME):
-	g++ $(CXXFLAGS) $(LDFLAGS) -lboost_unit_test_framework $(TESTSOURCES) -o $(TESTNAME)
+.cpp.o:
+	$(CC) $(CXXFLAGS) $< -o $@
