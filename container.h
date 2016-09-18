@@ -23,15 +23,20 @@ public:
     using key_type = Key;
     using value_type = Value;
 
-    Map(const char* filename)
-        : m_MappedFile(boost::interprocess::open_or_create, filename, 1024 * 1024 * 1024)
+    Map(const char* filename, const size_t fileSize = DEFAULT_FILE_SISE, const size_t bucketCount = DEFAULT_BUCKET_COUNT)
+        : m_BucketCount(bucketCount)
+        , m_MappedFile(boost::interprocess::open_or_create, filename, fileSize)
         , m_KeyAllocator(m_MappedFile.get_segment_manager())
         , m_ValueAllocator(m_MappedFile.get_segment_manager())
         , m_KeyNodeAllocator(m_MappedFile.get_segment_manager())
         , m_ValueNodeAllocator(m_MappedFile.get_segment_manager())
     {
-        m_KeyNodePtrArray = m_MappedFile.find_or_construct<KeyNodePtr>("KeyNodePtrArray")[BUCKET_COUNT](nullptr);
+        m_KeyNodePtrArray = m_MappedFile.find_or_construct<KeyNodePtr>("KeyNodePtrArray")[m_BucketCount](nullptr);
+        m_Size = m_MappedFile.find_or_construct<size_t>("Size")(0);
     }
+
+    Map(const Map&) = delete;
+    Map& operator =(const Map&) = delete;
 
     template <typename ProvidedKeyT, typename ProvidedValueT>
     void Insert(const ProvidedKeyT& key, const ProvidedValueT& value)
@@ -51,10 +56,26 @@ public:
         return EraseImpl(ConstructParam<Key, ProvidedKeyT>(key));
     }
 
+    template <typename ProvidedKeyT, typename ProvidedValueT>
+    size_t Erase(const ProvidedKeyT& key, const ProvidedValueT& value)
+    {
+        return EraseImpl(ConstructParam<Key, ProvidedKeyT>(key), ConstructParam<Value, ProvidedValueT>(value));
+    }
+
     template <typename ProvidedKeyT>
     size_t Count(const ProvidedKeyT& key)
     {
         return CountImpl(ConstructParam<Key, ProvidedKeyT>(key));
+    }
+
+    size_t Size() const
+    {
+        return *m_Size;
+    }
+
+    bool Empty() const
+    {
+        return *m_Size == 0;
     }
 
     bipc::managed_mapped_file::segment_manager* GetSegmentManager() const
@@ -89,19 +110,11 @@ private:
         m_ValueNodeAllocator.construct(newValueNode, std::move(ValueNodeT()));
         newValueNode->storedValue = newValue;
         
-        if ((*keyNode)->valueNode == nullptr)
-        {
-            (*keyNode)->valueNode = newValueNode;
-        }
-        else
-        {
-            ValueNodePtr* valueNode = &(*keyNode)->valueNode;
-
-            for(; *valueNode; valueNode = &((*valueNode)->nextValueNode));
-            *valueNode = newValueNode;
-        }
-
+        newValueNode->nextValueNode = (*keyNode)->valueNode;
+        (*keyNode)->valueNode = newValueNode;
+        
         ++(*keyNode)->childCount;
+        ++(*m_Size);
     }
 
     ValuePtr FindImpl(Key&& key)
@@ -115,20 +128,31 @@ private:
 
     size_t EraseImpl(Key&& key)
     {
-        const size_t keyHash = m_KeyHasher(key) % BUCKET_COUNT;
+        const size_t keyHash = m_KeyHasher(key) % m_BucketCount;
         
         KeyNodePtr keyNode = m_KeyNodePtrArray[keyHash];
-        size_t destroyedValues = false;
+        size_t erasedValues = 0ul;
 
         if (keyNode != nullptr)
         {
-            // The first node contains the key to be deleted
             KeyNodePtr previous = nullptr;
 
-            for (; keyNode; keyNode = keyNode->nextKeyNode, previous = keyNode)
+            for (; keyNode; previous = keyNode, keyNode = keyNode->nextKeyNode)
             {
                 if (*keyNode->storedKey == key)
                 {
+                    ValueNodePtr valueNode = keyNode->valueNode;
+
+                    for (; valueNode;)
+                    {
+                        ValueNodePtr toBeDestroyed = valueNode;
+
+                        valueNode = valueNode->nextValueNode;
+
+                        m_ValueNodeAllocator.destroy(toBeDestroyed);
+                        m_ValueNodeAllocator.deallocate_one(toBeDestroyed);
+                    }
+
                     KeyNodePtr toBeDestroyed = keyNode;
 
                     if (!previous)
@@ -140,18 +164,95 @@ private:
                         previous->nextKeyNode = keyNode->nextKeyNode;
                     }
                     
-                    destroyedValues = toBeDestroyed->childCount;
+                    erasedValues = toBeDestroyed->childCount;
 
                     m_KeyNodeAllocator.destroy(toBeDestroyed);
                     m_KeyNodeAllocator.deallocate_one(toBeDestroyed);
                 }
             }
 
-            return destroyedValues;
+            (*m_Size) -= erasedValues;
+            return erasedValues;
         }
         else
         {
             return 0;
+        }
+    }
+
+    size_t EraseImpl(Key&& key, Value&& value)
+    {
+        const size_t keyHash = m_KeyHasher(key) % m_BucketCount;
+        
+        KeyNodePtr keyNode = m_KeyNodePtrArray[keyHash];
+        size_t erasedValues = 0ul;
+
+        if (keyNode != nullptr)
+        {
+            KeyNodePtr previousKeyNode = nullptr;
+
+            for (; keyNode; previousKeyNode = keyNode, keyNode = keyNode->nextKeyNode)
+            {
+                if (*keyNode->storedKey == key)
+                {
+                    ValueNodePtr valueNode = keyNode->valueNode, previousValueNode = nullptr;
+                    for (; valueNode;)
+                    {
+                        if (*valueNode->storedValue == value)
+                        {
+                            ValueNodePtr toBeDestroyed = valueNode;
+
+                            if (!previousValueNode)
+                            {
+                                keyNode->valueNode = valueNode->nextValueNode;
+                                valueNode = keyNode->valueNode;
+                            }
+                            else
+                            {
+                                previousValueNode->nextValueNode = valueNode->nextValueNode;
+                                valueNode = previousValueNode->nextValueNode;
+                            }
+
+                            m_ValueNodeAllocator.destroy(toBeDestroyed);
+                            m_ValueNodeAllocator.deallocate_one(toBeDestroyed);
+                            ++erasedValues;
+                        }
+                        else
+                        {
+                            previousValueNode = valueNode;
+                            valueNode = valueNode->nextValueNode;
+                        }
+                    }
+
+                    if (erasedValues == keyNode->childCount)
+                    {
+                        KeyNodePtr toBeDestroyed = keyNode;
+
+                        if (!previousKeyNode)
+                        {
+                            m_KeyNodePtrArray[keyHash] = keyNode->nextKeyNode;
+                        }
+                        else
+                        {
+                            previousKeyNode->nextKeyNode = keyNode->nextKeyNode;
+                        }
+                        
+                        m_KeyNodeAllocator.destroy(toBeDestroyed);
+                        m_KeyNodeAllocator.deallocate_one(toBeDestroyed);
+                    }
+                    else
+                    {
+                        keyNode->childCount -= erasedValues;
+                    }
+                }
+            }
+
+            (*m_Size) -= erasedValues;
+            return erasedValues;
+        }
+        else
+        {
+            return 0ul;
         }
     }
 
@@ -216,7 +317,7 @@ private:
 
     std::pair<KeyNodePtr*, bool> FindKeyNode(const Key& key)
     {
-        const size_t keyHash = m_KeyHasher(key) % BUCKET_COUNT;
+        const size_t keyHash = m_KeyHasher(key) % m_BucketCount;
         
         KeyNodePtr* keyNode = m_KeyNodePtrArray + keyHash;
         bool foundKey = false;
@@ -246,9 +347,15 @@ private:
     {
         return Result(value, GetSegmentManager());
     }
-private:
-    static constexpr size_t BUCKET_COUNT {2 * size_t(1e6)};
 
+public:
+    static constexpr size_t DEFAULT_FILE_SISE {1024 * 1024 * 1024ul};
+    static constexpr size_t DEFAULT_BUCKET_COUNT {2 * size_t(1e6)};
+
+private:
+    const size_t m_BucketCount;
+
+    size_t* m_Size;
     bipc::managed_mapped_file m_MappedFile;
     KeyAllocator m_KeyAllocator;
     ValueAllocator m_ValueAllocator;
