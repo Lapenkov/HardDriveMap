@@ -1,13 +1,19 @@
 #include "container.h"
 #include <iostream>
+#include <boost/interprocess/containers/string.hpp>
 
 int main()
 {
-    HardDriveContainers::Map<std::string, std::string> a("store.tmp");
+    using namespace boost::interprocess;
 
-    a.Insert("key", "value");
+    using CharAllocator = allocator<char, managed_mapped_file::segment_manager>;
+    using string = basic_string<char, std::char_traits<char>, CharAllocator>;
 
-    std::cout << *a.Find("key") << std::endl;
+    HardDriveContainers::Map<string, string> a("store.tmp");
+    HardDriveContainers::Map<int, int> b("storeb.tmp");
+
+    a.Insert("value", "test");
+    b.Insert(1, 2);
 
     return 0;
 }
