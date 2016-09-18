@@ -94,8 +94,44 @@ BOOST_AUTO_TEST_CASE(few_bucket_functional_testing, *boost::unit_test::timeout(1
     BOOST_REQUIRE_EQUAL(a.Empty(), false);
 }
 
-BOOST_AUTO_TEST_CASE(space_testing, *boost::unit_test::timeout(10))
+BOOST_AUTO_TEST_CASE(space_testing)
 {
+    using namespace boost::interprocess;
+
+    using CharAllocator = allocator<char, managed_mapped_file::segment_manager>;
+    using string = basic_string<char, std::char_traits<char>, CharAllocator>;
+
+    const char* storeFileme = "store.tmp";
+
+    std::remove(storeFileme);
+
+    HardDriveContainers::Map<string, string> a(storeFileme, 1024ul, 10000000ul);
+
+    BOOST_REQUIRE_EQUAL(a.Size(), 0ul);
+    BOOST_REQUIRE_EQUAL(a.Empty(), true);
+
+    constexpr size_t elementCount = (size_t)1e6;
+
+    std::string key, value;
+    while (key.size() < 1024 && value.size() < 1024)
+    {
+        key += "key";
+        value += "value";
+    }
+
+    for (size_t i = 0; i < elementCount; ++i)
+    {
+        a.Insert(key.c_str(), value.c_str());
+    }
+
+    BOOST_REQUIRE_EQUAL(a.Size(), elementCount);
+    BOOST_REQUIRE_EQUAL(a.Count(key.c_str()), elementCount);
+    BOOST_REQUIRE_EQUAL(a.Empty(), false);
+
+    BOOST_REQUIRE_EQUAL(a.Erase(key.c_str(), value.c_str()), elementCount);
+    BOOST_REQUIRE_EQUAL(a.Empty(), true);
+    BOOST_TEST_MESSAGE(a.GetSegmentManager()->get_free_memory());
+    BOOST_CHECK(a.GetSegmentManager()->get_free_memory() > 1024 * (size_t)1e6);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

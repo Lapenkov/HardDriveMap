@@ -3,6 +3,7 @@
 #include <boost/functional/hash.hpp>
 #include <string>
 #include <functional>
+#include <memory>
 
 namespace HardDriveContainers
 {
@@ -23,16 +24,24 @@ public:
     using key_type = Key;
     using value_type = Value;
 
-    Map(const char* filename, const size_t fileSize = DEFAULT_FILE_SISE, const size_t bucketCount = DEFAULT_BUCKET_COUNT)
+    Map(const char* filename, const size_t fileSize = DEFAULT_FILE_SIZE, const size_t bucketCount = DEFAULT_BUCKET_COUNT)
         : m_BucketCount(bucketCount)
-        , m_MappedFile(boost::interprocess::open_or_create, filename, fileSize)
-        , m_KeyAllocator(m_MappedFile.get_segment_manager())
-        , m_ValueAllocator(m_MappedFile.get_segment_manager())
-        , m_KeyNodeAllocator(m_MappedFile.get_segment_manager())
-        , m_ValueNodeAllocator(m_MappedFile.get_segment_manager())
+        , m_Filename(filename)
+        , m_MappedFile(new bipc::managed_mapped_file(boost::interprocess::open_or_create, filename, fileSize))
+        , m_KeyAllocator(m_MappedFile->get_segment_manager())
+        , m_ValueAllocator(m_MappedFile->get_segment_manager())
+        , m_KeyNodeAllocator(m_MappedFile->get_segment_manager())
+        , m_ValueNodeAllocator(m_MappedFile->get_segment_manager())
     {
-        m_KeyNodePtrArray = m_MappedFile.find_or_construct<KeyNodePtr>("KeyNodePtrArray")[m_BucketCount](nullptr);
-        m_Size = m_MappedFile.find_or_construct<size_t>("Size")(0);
+        const size_t minFileSize = m_BucketCount * sizeof(KeyNodePtr) + sizeof(size_t) + MAX_PAIR_SIZE * 10;
+        if (fileSize < minFileSize)
+        {
+            m_MappedFile->grow(filename, minFileSize - fileSize);
+            RemapFile();
+        }
+
+        m_KeyNodePtrArray = m_MappedFile->find_or_construct<KeyNodePtr>("KeyNodePtrArray")[m_BucketCount](nullptr);
+        m_Size = m_MappedFile->find_or_construct<size_t>("Size")(0);
     }
 
     Map(const Map&) = delete;
@@ -41,6 +50,11 @@ public:
     template <typename ProvidedKeyT, typename ProvidedValueT>
     void Insert(const ProvidedKeyT& key, const ProvidedValueT& value)
     {
+        if (GetSegmentManager()->get_free_memory() < MAX_PAIR_SIZE)
+        {
+            bipc::managed_mapped_file::grow(m_Filename.c_str(), GetSegmentManager()->get_size() / 2);
+            RemapFile();
+        }
         InsertImpl(ConstructParam<Key, ProvidedKeyT>(key), ConstructParam<Value, ProvidedValueT>(value));
     }
 
@@ -80,7 +94,7 @@ public:
 
     bipc::managed_mapped_file::segment_manager* GetSegmentManager() const
     {
-        return m_MappedFile.get_segment_manager();
+        return m_MappedFile->get_segment_manager();
     }
 
     ~Map()
@@ -149,6 +163,9 @@ private:
 
                         valueNode = valueNode->nextValueNode;
 
+                        m_ValueAllocator.destroy(toBeDestroyed->storedValue);
+                        m_ValueAllocator.deallocate_one(toBeDestroyed->storedValue);
+
                         m_ValueNodeAllocator.destroy(toBeDestroyed);
                         m_ValueNodeAllocator.deallocate_one(toBeDestroyed);
                     }
@@ -165,6 +182,9 @@ private:
                     }
                     
                     erasedValues = toBeDestroyed->childCount;
+
+                    m_KeyAllocator.destroy(toBeDestroyed->storedKey);
+                    m_KeyAllocator.deallocate_one(toBeDestroyed->storedKey);
 
                     m_KeyNodeAllocator.destroy(toBeDestroyed);
                     m_KeyNodeAllocator.deallocate_one(toBeDestroyed);
@@ -213,6 +233,9 @@ private:
                                 valueNode = previousValueNode->nextValueNode;
                             }
 
+                            m_ValueAllocator.destroy(toBeDestroyed->storedValue);
+                            m_ValueAllocator.deallocate_one(toBeDestroyed->storedValue);
+
                             m_ValueNodeAllocator.destroy(toBeDestroyed);
                             m_ValueNodeAllocator.deallocate_one(toBeDestroyed);
                             ++erasedValues;
@@ -237,6 +260,9 @@ private:
                             previousKeyNode->nextKeyNode = keyNode->nextKeyNode;
                         }
                         
+                        m_KeyAllocator.destroy(toBeDestroyed->storedKey);
+                        m_KeyAllocator.deallocate_one(toBeDestroyed->storedKey);
+
                         m_KeyNodeAllocator.destroy(toBeDestroyed);
                         m_KeyNodeAllocator.deallocate_one(toBeDestroyed);
                     }
@@ -263,6 +289,23 @@ private:
         KeyNodePtr* keyNode = result.first;
 
         return (foundKey) ? (*keyNode)->childCount : 0;
+    }
+
+    void RemapFile()
+    {
+        m_MappedFile.reset(new bipc::managed_mapped_file(bipc::open_only, m_Filename.c_str()));
+        KeyAllocator newKeyAlloc(m_MappedFile->get_segment_manager());
+        ValueAllocator newValueAlloc(m_MappedFile->get_segment_manager());
+        KeyNodeAllocator newKeyNodeAlloc(m_MappedFile->get_segment_manager());
+        ValueNodeAllocator newValueNodeAlloc(m_MappedFile->get_segment_manager());
+
+        swap(newKeyAlloc, m_KeyAllocator);
+        swap(newValueAlloc, m_ValueAllocator);
+        swap(newKeyNodeAlloc, m_KeyNodeAllocator);
+        swap(newValueNodeAlloc, m_ValueNodeAllocator);
+
+        m_KeyNodePtrArray = m_MappedFile->find<KeyNodePtr>("KeyNodePtrArray").first;
+        m_Size = m_MappedFile->find<size_t>("Size").first;
     }
 
     struct ValueNodeT;
@@ -349,14 +392,16 @@ private:
     }
 
 public:
-    static constexpr size_t DEFAULT_FILE_SISE {1024 * 1024 * 1024ul};
+    static constexpr size_t DEFAULT_FILE_SIZE {128 * 1024 * 1024ul};
     static constexpr size_t DEFAULT_BUCKET_COUNT {2 * size_t(1e6)};
+    static constexpr size_t MAX_PAIR_SIZE {2 * 256 * 1024 + sizeof(KeyNodeT) + sizeof(ValueNodeT)};
 
 private:
     const size_t m_BucketCount;
+    const std::string m_Filename;
 
     size_t* m_Size;
-    bipc::managed_mapped_file m_MappedFile;
+    std::unique_ptr<bipc::managed_mapped_file> m_MappedFile;
     KeyAllocator m_KeyAllocator;
     ValueAllocator m_ValueAllocator;
     KeyNodeAllocator m_KeyNodeAllocator;
