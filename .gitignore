@@ -1,3 +1,8 @@
+# Temporaries
+fs_dump
+container_test
+storage.bin
+
 # Vim temporaries
 *.swp
 *.swo
