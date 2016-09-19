@@ -150,11 +150,24 @@ BOOST_AUTO_TEST_CASE(move_test)
     std::remove(storeFileme);
 
     HardDriveContainers::Map<string, string> a(storeFileme);
+
+    a.Insert("1", "1");
+    a.Insert("1", "2");
     HardDriveContainers::Map<string, string> b(std::move(a));
 
-    b.Insert("1", "1");
-    BOOST_REQUIRE_EQUAL(b.Size(), 1ul);
-    BOOST_REQUIRE_EQUAL(*b.Find("1"), "1");
+    b.Insert("1", "3");
+    BOOST_REQUIRE_EQUAL(b.Size(), 3ul);
+    BOOST_REQUIRE_EQUAL(*b.Find("1"), "3");
+
+    auto valueNode = b.FindAll("1");
+
+    std::vector<std::string> values;
+    for (; valueNode; valueNode = valueNode->nextValueNode)
+    {
+        values.push_back(valueNode->storedValue->c_str());
+    }
+
+    BOOST_CHECK(values == std::vector<std::string>({"3", "2", "1"}));
 
     std::remove(storeFileme);
 }
