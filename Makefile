@@ -2,9 +2,9 @@ CC=g++
 
 HEADERS=container.h
 
-APPNAME=container
-APPSOURCES=container.cpp
-APPOBJECTS=container.o
+APPNAME=fs_dump
+APPSOURCES=$(APPNAME).cpp
+APPOBJECTS=$(APPNAME).o
 
 TESTNAME=container_test
 TESTSOURCES=container_test.cpp
