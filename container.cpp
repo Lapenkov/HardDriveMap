@@ -35,11 +35,12 @@ int main(int argc, const char** argv)
 
             for (; dir != end; )
             {
+                const std::string pathStr = dir->path().string();
+
                 try
                 {
                     if (fs::is_regular_file(dir->path()))
                     {
-                        const std::string pathStr = dir->path().string();
                         const std::string fileName = dir->path().filename().string();
 
                         filePathStorage.Insert(fileName.c_str(), pathStr.c_str());
@@ -55,13 +56,13 @@ int main(int argc, const char** argv)
                 }
                 catch (const fs::filesystem_error& ex)
                 {
-                    BOOST_LOG_TRIVIAL(error) << "Filesystem error: " << ex.what();
+                    BOOST_LOG_TRIVIAL(error) << "Filesystem error while processing " << pathStr << ": " << ex.what();
                     dir.no_push();
                     ++dir;
                 }
                 catch (const bipc::bad_alloc& ex)
                 {
-                    BOOST_LOG_TRIVIAL(error) << "Error allocating memory: " << ex.what();
+                    BOOST_LOG_TRIVIAL(error) << "Error allocating memory while processing " << pathStr << ": "  << ex.what();
                 }
             }
             
