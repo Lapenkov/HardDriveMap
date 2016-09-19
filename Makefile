@@ -1,5 +1,7 @@
 CC=g++
 
+HEADERS=container.h
+
 APPNAME=container
 APPSOURCES=container.cpp
 APPOBJECTS=container.o
@@ -27,5 +29,5 @@ $(APPNAME): $(APPOBJECTS)
 $(TESTNAME): $(TESTOBJECTS)
 	$(CC) $(TESTOBJECTS) $(LDFLAGS_TEST) -o $@
 
-.cpp.o:
+%.o: %.cpp $(HEADERS)
 	$(CC) $(CXXFLAGS) $< -o $@

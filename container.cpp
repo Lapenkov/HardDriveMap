@@ -32,24 +32,40 @@ int main(int argc, const char** argv)
 
             BOOST_LOG_TRIVIAL(info) << "Started scanning folder '" << folder.string() << "'";
             size_t processedFiles = 0;
-            for (; dir != end; ++dir)
+
+            for (; dir != end; )
             {
-                if (fs::is_regular_file(dir->path()))
+                try
                 {
-                    const std::string pathStr = dir->path().string();
-                    const std::string fileName = dir->path().filename().string();
+                    if (fs::is_regular_file(dir->path()))
+                    {
+                        const std::string pathStr = dir->path().string();
+                        const std::string fileName = dir->path().filename().string();
 
-                    filePathStorage.Insert(fileName.c_str(), pathStr.c_str());
-                    ++processedFiles;
+                        filePathStorage.Insert(fileName.c_str(), pathStr.c_str());
+                        ++processedFiles;
+
+                        if (processedFiles % 10000 == 0)
+                        {
+                            BOOST_LOG_TRIVIAL(info) << "Scanned " << processedFiles << " files";
+                        }
+                    }
+                    
+                    ++dir;
                 }
-
-                if (processedFiles % 10000 == 0)
+                catch (const fs::filesystem_error& ex)
                 {
-                    BOOST_LOG_TRIVIAL(info) << "Scanned " << processedFiles << " files";
+                    BOOST_LOG_TRIVIAL(error) << "Filesystem error: " << ex.what();
+                    dir.no_push();
+                    ++dir;
+                }
+                catch (const bipc::bad_alloc& ex)
+                {
+                    BOOST_LOG_TRIVIAL(error) << "Error allocating memory: " << ex.what();
                 }
             }
             
-            BOOST_LOG_TRIVIAL(info) << "Finished scanning";
+            BOOST_LOG_TRIVIAL(info) << "Finished scanning: " << processedFiles << " files scanned";
         }
         else
         {
@@ -59,15 +75,18 @@ int main(int argc, const char** argv)
     else if (std::string(argv[1]) == "find")
     {
         HardDriveContainers::Map<string, string> filePathStorage(storageFile);
-        auto pathPtr = filePathStorage.Find(argv[2]);
+        auto valueNodePtr = filePathStorage.FindAll(argv[2]);
 
-        if (pathPtr == nullptr)
+        if (valueNodePtr == nullptr)
         {
             BOOST_LOG_TRIVIAL(info) << "No path found";
         }
         else
         {
-            BOOST_LOG_TRIVIAL(info) << *pathPtr;
+            for (; valueNodePtr; valueNodePtr = valueNodePtr->nextValueNode)
+            {
+                BOOST_LOG_TRIVIAL(info) << *valueNodePtr->storedValue;
+            }
         }
     }
     else

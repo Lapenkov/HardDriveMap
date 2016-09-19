@@ -17,10 +17,61 @@ template <class Key,
          class KeyHash = boost::hash<Key>>
 class Map
 {
-public:
+private:
     using ValuePtr = typename ValueAllocator::pointer;
     using KeyPtr = typename KeyAllocator::pointer;
 
+    struct ValueNodeT;
+    using ValueNodeAllocator = bipc::allocator<ValueNodeT, bipc::managed_mapped_file::segment_manager>;
+    using ValueNodePtr = typename ValueNodeAllocator::pointer;
+
+    struct ValueNodeT
+    {
+        ValueNodeT()
+        {}
+
+        ValueNodeT(const ValueNodeT&) = delete;
+        ValueNodeT& operator =(const ValueNodeT&) = delete;
+
+        ValueNodeT(const ValueNodeT&& rhv)
+            : storedValue(rhv.storedValue)
+            , nextValueNode(rhv.nextValueNode)
+        {}
+
+        ValuePtr storedValue;
+        ValueNodePtr nextValueNode {nullptr}; 
+
+        ~ValueNodeT()
+        {}
+    };
+
+    struct KeyNodeT;
+    using KeyNodeAllocator = bipc::allocator<KeyNodeT, bipc::managed_mapped_file::segment_manager>;
+    using KeyNodePtr = typename KeyNodeAllocator::pointer;
+
+    struct KeyNodeT
+    {
+        KeyNodeT()
+        {}
+
+        KeyNodeT(const KeyNodeT&) = delete;
+        KeyNodeT& operator =(const KeyNodeT&) = delete;
+
+        KeyNodeT(const KeyNodeT&& rhv)
+            : valueNode(rhv.valueNode)
+            , nextKeyNode(rhv.nextKeyNode)
+        {}
+
+        KeyPtr storedKey;
+        ValueNodePtr valueNode {nullptr};
+        KeyNodePtr nextKeyNode {nullptr}; 
+        size_t childCount {0};
+
+        ~KeyNodeT()
+        {}
+    };
+
+public:
     using key_type = Key;
     using value_type = Value;
 
@@ -47,6 +98,33 @@ public:
     Map(const Map&) = delete;
     Map& operator =(const Map&) = delete;
 
+    Map(Map&& rhv)
+        : m_BucketCount(rhv.m_BucketCount)
+        , m_Filename(std::move(rhv.m_Filename))
+        , m_Size(rhv.m_Size)
+        , m_MappedFile(std::move(rhv.m_MappedFile))
+        , m_KeyAllocator(std::move(rhv.m_KeyAllocator))
+        , m_ValueAllocator(std::move(rhv.m_ValueAllocator))
+        , m_KeyNodeAllocator(std::move(rhv.m_KeyNodeAllocator))
+        , m_ValueNodeAllocator(std::move(rhv.m_ValueNodeAllocator))
+        , m_KeyHasher(std::move(rhv.m_KeyHasher))
+        , m_KeyNodePtrArray(rhv.m_KeyNodePtrArray)
+    {}
+
+    Map& operator=(Map&& rhv)
+    {
+        m_BucketCount = rhv.m_BucketCount;
+        m_Filename = std::move(rhv.m_Filename);
+        m_Size = rhv.m_Size;
+        m_MappedFile = std::move(rhv.m_MappedFile);
+        m_KeyAllocator = std::move(rhv.m_KeyAllocator);
+        m_ValueAllocator = std::move(rhv.m_ValueAllocator);
+        m_KeyNodeAllocator = std::move(rhv.m_KeyNodeAllocator);
+        m_ValueNodeAllocator = std::move(rhv.m_ValueNodeAllocator);
+        m_KeyHasher = std::move(rhv.m_KeyHasher);
+        m_KeyNodePtrArray = rhv.m_KeyNodePtrArray;
+    }
+
     template <typename ProvidedKeyT, typename ProvidedValueT>
     void Insert(const ProvidedKeyT& key, const ProvidedValueT& value)
     {
@@ -60,6 +138,14 @@ public:
 
     template <typename ProvidedKeyT>
     ValuePtr Find(const ProvidedKeyT& key)
+    {
+        ValueNodePtr valueNode = FindImpl(ConstructParam<Key, ProvidedKeyT>(key));
+
+        return (valueNode) ? valueNode->storedValue : nullptr;
+    }
+
+    template <typename ProvidedKeyT>
+    ValueNodePtr FindAll(const ProvidedKeyT& key)
     {
         return FindImpl(ConstructParam<Key, ProvidedKeyT>(key));
     }
@@ -131,13 +217,13 @@ private:
         ++(*m_Size);
     }
 
-    ValuePtr FindImpl(Key&& key)
+    ValueNodePtr FindImpl(Key&& key)
     {
         std::pair<KeyNodePtr*, bool> result = FindKeyNode(key);
         bool foundKey = result.second;
         KeyNodePtr* keyNode = result.first;
 
-        return (foundKey) ? (*keyNode)->valueNode->storedValue : nullptr;
+        return (foundKey) ? (*keyNode)->valueNode : nullptr;
     }
 
     size_t EraseImpl(Key&& key)
@@ -307,56 +393,6 @@ private:
         m_KeyNodePtrArray = m_MappedFile->find<KeyNodePtr>("KeyNodePtrArray").first;
         m_Size = m_MappedFile->find<size_t>("Size").first;
     }
-
-    struct ValueNodeT;
-    using ValueNodeAllocator = typename ValueAllocator::template rebind<ValueNodeT>::other;
-    using ValueNodePtr = typename ValueNodeAllocator::pointer;
-
-    struct ValueNodeT
-    {
-        ValueNodeT()
-        {}
-
-        ValueNodeT(const ValueNodeT&) = delete;
-        ValueNodeT& operator =(const ValueNodeT&) = delete;
-
-        ValueNodeT(const ValueNodeT&& rhv)
-            : storedValue(rhv.storedValue)
-            , nextValueNode(rhv.nextValueNode)
-        {}
-
-        ValuePtr storedValue;
-        ValueNodePtr nextValueNode {nullptr}; 
-
-        ~ValueNodeT()
-        {}
-    };
-
-    struct KeyNodeT;
-    using KeyNodeAllocator = typename ValueAllocator::template rebind<KeyNodeT>::other;
-    using KeyNodePtr = typename KeyNodeAllocator::pointer;
-
-    struct KeyNodeT
-    {
-        KeyNodeT()
-        {}
-
-        KeyNodeT(const KeyNodeT&) = delete;
-        KeyNodeT& operator =(const KeyNodeT&) = delete;
-
-        KeyNodeT(const KeyNodeT&& rhv)
-            : valueNode(rhv.valueNode)
-            , nextKeyNode(rhv.nextKeyNode)
-        {}
-
-        KeyPtr storedKey;
-        ValueNodePtr valueNode {nullptr};
-        KeyNodePtr nextKeyNode {nullptr}; 
-        size_t childCount {0};
-
-        ~KeyNodeT()
-        {}
-    };
 
     std::pair<KeyNodePtr*, bool> FindKeyNode(const Key& key)
     {

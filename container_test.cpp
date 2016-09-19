@@ -92,6 +92,8 @@ BOOST_AUTO_TEST_CASE(few_bucket_functional_testing, *boost::unit_test::timeout(1
     BOOST_REQUIRE_EQUAL(a.Count(sampleKey), 0ul);
     BOOST_REQUIRE_EQUAL(a.Size(), elementCount - 1);
     BOOST_REQUIRE_EQUAL(a.Empty(), false);
+
+    std::remove(storeFileme);
 }
 
 BOOST_AUTO_TEST_CASE(space_testing)
@@ -132,6 +134,28 @@ BOOST_AUTO_TEST_CASE(space_testing)
     BOOST_REQUIRE_EQUAL(a.Empty(), true);
     BOOST_TEST_MESSAGE(a.GetSegmentManager()->get_free_memory());
     BOOST_CHECK(a.GetSegmentManager()->get_free_memory() > 1024 * (size_t)1e6);
+
+    std::remove(storeFileme);
 }
 
+BOOST_AUTO_TEST_CASE(move_test)
+{
+    using namespace boost::interprocess;
+
+    using CharAllocator = allocator<char, managed_mapped_file::segment_manager>;
+    using string = basic_string<char, std::char_traits<char>, CharAllocator>;
+
+    const char* storeFileme = "store.tmp";
+
+    std::remove(storeFileme);
+
+    HardDriveContainers::Map<string, string> a(storeFileme);
+    HardDriveContainers::Map<string, string> b(std::move(a));
+
+    b.Insert("1", "1");
+    BOOST_REQUIRE_EQUAL(b.Size(), 1ul);
+    BOOST_REQUIRE_EQUAL(*b.Find("1"), "1");
+
+    std::remove(storeFileme);
+}
 BOOST_AUTO_TEST_SUITE_END()
